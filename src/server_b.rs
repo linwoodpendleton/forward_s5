@@ -4,7 +4,11 @@ use tokio::time::{timeout, Duration};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::io;
-use crate::aes_crypto::AesCryptoStream;
+use std::sync::Arc;
+use moka::sync::Cache;
+use tokio::sync::Mutex;
+use crate::aes_crypto_b::AesCryptoStream;
+use crate::q_server::run_server;
 
 const SOCKS_VERSION: u8 = 0x05;
 const RESERVED: u8 = 0x00;
@@ -17,14 +21,28 @@ const COMMAND_CONNECT: u8 = 0x01;
 const COMMAND_UDP_ASSOCIATE: u8 = 0x03;
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
+    let socket_cache: Arc<Cache<String, Arc<Mutex<TcpStream>>>> = Arc::new(Cache::builder()
+        .time_to_live(Duration::from_secs(60))
+        .time_to_idle(Duration::from_secs(30))
+        .build());
+    // 启动 run_server 这个循环监听的服务
+    let cache_clone = socket_cache.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_server(cache_clone).await {
+            eprintln!("Error while running run_server: {}", e);
+        }
+    });
     let listener = TcpListener::bind("0.0.0.0:6060").await?;
     println!("Server B (SOCKS5) listening on 0.0.0.0:6060");
 
     loop {
         let (socket, addr) = listener.accept().await?;
         println!("Server B accepted connection from {}", addr);
-
-        let mut crypto_stream = AesCryptoStream::new(socket);
+        let client_ip = addr.ip().to_string();
+        let client_port = addr.port().to_string();
+        //计算client_ip+client_port的hash值
+        let hash = format!("{:x}", md5::compute(client_ip+&client_port));
+        let mut crypto_stream = AesCryptoStream::new(socket,hash,socket_cache.clone());
 
         tokio::spawn(async move {
             if let Err(e) = handle_socks5_connection(&mut crypto_stream).await {
@@ -38,10 +56,13 @@ async fn handle_socks5_connection<T>(stream: &mut T) -> Result<(), Box<dyn Error
 where
     T: AsyncReadExt + AsyncWriteExt + Unpin,
 {
+
+
     // 1. 读取 SOCKS5 握手：版本号和支持的认证方法数量
-    let mut buf = [0u8; 2];
+
+    let mut buf = [0u8; 42];
     stream.read_exact(&mut buf).await?;
-    if buf[0] != SOCKS_VERSION {
+    if buf[36] != SOCKS_VERSION {
         return Err("Unsupported SOCKS version".into());
     }
     let nmethods = buf[1] as usize;
