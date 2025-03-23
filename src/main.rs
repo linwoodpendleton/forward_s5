@@ -3,7 +3,7 @@ mod server_a;
 mod server_b;
 mod aes_crypto_a;
 mod q_server;
-mod q_client;
+
 
 use std::env;
 

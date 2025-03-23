@@ -1,3 +1,4 @@
+//server_b.rs
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{timeout, Duration};
@@ -6,10 +7,9 @@ use std::net::SocketAddr;
 use std::io;
 use std::sync::Arc;
 use moka::sync::Cache;
-use tokio::sync::Mutex;
 use crate::aes_crypto_b::AesCryptoStream;
 use crate::q_server::run_server;
-
+use tokio::sync::Mutex;
 const SOCKS_VERSION: u8 = 0x05;
 const RESERVED: u8 = 0x00;
 const METHOD_NO_AUTH: u8 = 0x00;
@@ -21,17 +21,25 @@ const COMMAND_CONNECT: u8 = 0x01;
 const COMMAND_UDP_ASSOCIATE: u8 = 0x03;
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
-    let socket_cache: Arc<Cache<String, Arc<Mutex<TcpStream>>>> = Arc::new(Cache::builder()
+    let read_que = Arc::new(Cache::builder()
         .time_to_live(Duration::from_secs(60))
         .time_to_idle(Duration::from_secs(30))
         .build());
-    // 启动 run_server 这个循环监听的服务
-    let cache_clone = socket_cache.clone();
+    let write_que = Arc::new(Cache::builder()
+        .time_to_live(Duration::from_secs(60))
+        .time_to_idle(Duration::from_secs(30))
+        .build());
+
+    // 克隆一份供 run_server 使用
+    let run_server_read_que = read_que.clone();
+    let run_server_write_que = write_que.clone();
+
     tokio::spawn(async move {
-        if let Err(e) = run_server(cache_clone).await {
+        if let Err(e) = run_server(run_server_read_que, run_server_write_que).await {
             eprintln!("Error while running run_server: {}", e);
         }
     });
+
     let listener = TcpListener::bind("0.0.0.0:6060").await?;
     println!("Server B (SOCKS5) listening on 0.0.0.0:6060");
 
@@ -40,9 +48,12 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         println!("Server B accepted connection from {}", addr);
         let client_ip = addr.ip().to_string();
         let client_port = addr.port().to_string();
-        //计算client_ip+client_port的hash值
-        let hash = format!("{:x}", md5::compute(client_ip+&client_port));
-        let mut crypto_stream = AesCryptoStream::new(socket,hash,socket_cache.clone());
+        // 这里再次克隆，使用原始的 read_que 和 write_que
+        let read_que = read_que.clone();
+        let write_que = write_que.clone();
+        // 计算 client_ip + client_port 的 hash 值
+        let hash = format!("{:x}", md5::compute(client_ip + &client_port));
+        let mut crypto_stream = AesCryptoStream::new(socket, hash, read_que.clone(), write_que.clone());
 
         tokio::spawn(async move {
             if let Err(e) = handle_socks5_connection(&mut crypto_stream).await {
@@ -52,6 +63,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     }
 }
 
+
 async fn handle_socks5_connection<T>(stream: &mut T) -> Result<(), Box<dyn Error>>
 where
     T: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -59,14 +71,18 @@ where
 
 
     // 1. 读取 SOCKS5 握手：版本号和支持的认证方法数量
-
-    let mut buf = [0u8; 42];
+    let mut testbuf = [0u8; 33];
+    stream.read_exact(&mut testbuf).await?;
+    let mut buf = [0u8; 2];
+    println!("start read 1");
     stream.read_exact(&mut buf).await?;
-    if buf[36] != SOCKS_VERSION {
+    if buf[0] != SOCKS_VERSION {
+
         return Err("Unsupported SOCKS version".into());
     }
     let nmethods = buf[1] as usize;
     let mut methods = vec![0u8; nmethods];
+    println!("start read 2");
     stream.read_exact(&mut methods).await?;
 
     // 2. 选择认证方式（支持无认证方式）
@@ -75,11 +91,12 @@ where
     } else {
         0xFF
     };
+    println!("start read 3");
     stream.write_all(&[SOCKS_VERSION, selected_method]).await?;
     if selected_method == 0xFF {
         return Err("No acceptable authentication method".into());
     }
-
+    println!("start read 5");
     // 3. 读取 SOCKS5 请求头（版本、命令、保留字段、地址类型）
     let mut req_header = [0u8; 4];
     stream.read_exact(&mut req_header).await?;

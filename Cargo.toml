@@ -14,3 +14,4 @@ futures = "0.3.31"
 md5 = "0.7.0"
 
 moka = { version = "0.12.8", features = ["sync", "future"] }
+crossbeam-queue = "0.3.12"

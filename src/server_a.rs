@@ -18,16 +18,29 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             // 此处应实现完整的 SOCKS5 握手（省略细节），
             // 假设握手完成后 client 已获得目标请求数据。
             // 为简化示例，直接开始转发
+            let client_ip = addr.ip().to_string();
+            let client_port = addr.port().to_string();
+            //计算client_ip+client_port的hash值
+            let client_hash = format!("{:x}", md5::compute(client_ip+&client_port));
+            let mut socket_b = match TcpStream::connect("127.0.0.1:58080").await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("Failed to connect to 127.0.0.1:58080: {}", e);
+                    return;
+                }
+            };
 
+            if let Err(e) = socket_b.write_all(client_hash.as_bytes()).await {
+                eprintln!("Failed to send hash: {}", e);
+                return;
+            }
+            println!("Connected to server and sent hash");
             // 连接到服务器 B（假设其地址为 127.10.0.200:6060）
             match TcpStream::connect("127.0.0.1:6060").await {
                 Ok(remote) => {
                     // 将 remote 包装成 AES 加密的通道
-                    let client_ip = addr.ip().to_string();
-                    let client_port = addr.port().to_string();
-                    //计算client_ip+client_port的hash值
-                    let client_hash = format!("{:x}", md5::compute(client_ip+&client_port));
-                    let mut crypto_remote_result = AesCryptoStream::new_async(remote,client_hash.clone()).await;
+
+                    let mut crypto_remote_result = AesCryptoStream::new_async(remote,socket_b).await;
                     let mut crypto_remote = match crypto_remote_result {
                         Ok(crypto_remote) => crypto_remote,
                         Err(e) => {

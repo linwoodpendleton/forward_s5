@@ -44,24 +44,22 @@ pub struct AesCryptoStream<T> {
     pub inner: T,
     read_buf: Vec<u8>,
     read_pos: usize,
-    hash: String,
     socket_b: TcpStream,
     first:bool,
 }
 
 impl<T> AesCryptoStream<T> {
-    pub async fn new_async(inner: T, hash: String) -> IoResult<Self> {
+    pub async fn new_async(inner: T, s: TcpStream) -> IoResult<Self> {
         // 在同一个 Runtime 里异步地去连接 8080
-        let mut socket_b = TcpStream::connect("127.0.0.1:8080").await?;
-        socket_b.write_all(hash.as_bytes()).await?;
-        println!("Connected to server and sent hash");
+
+
 
         Ok(Self {
             inner,
             read_buf: Vec::new(),
             read_pos: 0,
-            hash,
-            socket_b,
+
+            socket_b:s,
             first:true,
         })
     }
@@ -74,6 +72,7 @@ impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
         cx: &mut Context<'_>,
         out_buf: &mut ReadBuf<'_>
     ) -> Poll<IoResult<()>> {
+        println!("poll_read");
         // 如果有已解密数据，则先返回缓冲区中的数据
         if self.read_pos < self.read_buf.len() {
             let remaining = &self.read_buf[self.read_pos..];
@@ -154,7 +153,7 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for AesCryptoStream<T> {
             tmp_buf = encrypted;
         }
         match Pin::new(&mut self.inner).poll_write(cx, &tmp_buf) {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(tmp_buf.len())), // 这里假设写入成功后返回原始数据长度
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(buf.len())), // 这里假设写入成功后返回原始数据长度
             other => other,
         }
         
