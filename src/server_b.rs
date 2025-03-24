@@ -9,7 +9,7 @@ use std::sync::Arc;
 use moka::sync::Cache;
 use crate::aes_crypto_b::AesCryptoStream;
 use crate::q_server::run_server;
-use tokio::sync::Mutex;
+use flume::{unbounded, Receiver, Sender};
 const SOCKS_VERSION: u8 = 0x05;
 const RESERVED: u8 = 0x00;
 const METHOD_NO_AUTH: u8 = 0x00;

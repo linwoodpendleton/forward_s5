@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 use std::io::Result as IoResult;
 use std::sync::Arc;
 use crossbeam_queue::SegQueue;
+use flume::{unbounded, Receiver, Sender};
 use moka::sync::Cache;
 
 use futures::lock::Mutex;
@@ -62,16 +63,16 @@ pub struct AesCryptoStream<T> {
     wait_count: u32,
     sleep_future: Option<Pin<Box<Sleep>>>,
     data_len: usize,
-    read_que: Arc<Cache<String, Arc<SegQueue<Vec<u8>>>>>,
-    write_que:Arc<Cache<String, Arc<SegQueue<Vec<u8>>>>>,
-    read_que_d: Option<Arc<SegQueue<Vec<u8>>>>,
-    write_que_d:Option<Arc<SegQueue<Vec<u8>>>>,
+    read_que: Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,
+    write_que:Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,
+    read_que_d: Option<Arc<Receiver<Vec<u8>>>>,
+    write_que_d:Option<Arc<Sender<Vec<u8>>>>,
 }
 
 impl<T> AesCryptoStream<T> {
     const MAX_RETRY: u8 = 10;
 
-    pub fn new(inner: T,s:String,read_que: Arc<Cache<String, Arc<SegQueue<Vec<u8>>>>>,write_que:Arc<Cache<String, Arc<SegQueue<Vec<u8>>>>>) -> Self {
+    pub fn new(inner: T,s:String,read_que:Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,write_que:Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>) -> Self {
         Self { inner, read_buf: Vec::new(), read_pos: 0 ,hash:s,first:true, partial_buf: vec![], partial_needed: 32, wait_count: 0, sleep_future: None, data_len: 0, read_que, write_que, read_que_d: None, write_que_d: None }
     }
 }
@@ -135,55 +136,30 @@ impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
                         // 1) 检查缓存
 
 
-
-
-                            let maybe_read = self.read_que.get(&self.hash);
-                            match maybe_read {
-                                Some(mut read) => {
-                                    println!("Found socket in cache");
-                                    self.read_que_d = Some(read);
-
-                                },
-                                None => {
-                                    println!("Not found socket in cache");
-                                }
+                        let maybe_read = self.read_que.get(&self.hash);
+                        match maybe_read {
+                            Some(mut read) => {
+                                println!("Found socket in cache");
+                                self.read_que_d = Some(read);
+                            },
+                            None => {
+                                println!("Not found socket in cache");
                             }
-                            let maybe_write = self.write_que.get(&self.hash);
-                            match maybe_write {
-                                Some(mut write) => {
-                                    println!("Found socket in cache");
-                                    self.write_que_d = Some(write);
-
-                                },
-                                None => {
-                                    println!("Not found socket in cache");
-                                }
-                            }
-
-
+                        }
+                        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
+                        self.write_que_d = Some(Arc::new(tx));
+                        self.write_que.insert(self.hash.clone(), Arc::new(rx));
                     }
-
-
-
                 }
                 // let mut this = self;
                 let mut this = self.as_mut();
                 loop {
-                    let maybe_buf = if let Some(ref read_mutex) = this.read_que_d {
-                        let read_mutex_lock = read_mutex.pop();
-                        match read_mutex_lock {
-                            Some(buf) => {
-                                Some(buf)
-                            },
-                            None => {
-                                None
-                            }
+                    let maybe_buf = this.read_que_d.as_ref().and_then(|read| {
+                        match read.try_recv() {
+                            Ok(buf) => Some(buf),
+                            Err(_) => None,
                         }
-
-
-                    } else {
-                        None
-                    };
+                    });
 
                     if let Some(buf) = maybe_buf {
                         // 锁已在上面的作用域中释放，现在可以安全地修改 this 内部数据
@@ -227,16 +203,10 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for AesCryptoStream<T> {
         let encrypted = encrypt(buf);
 
 
-        // 如果找到了写队列，则使用 futures::lock::Mutex 的 poll_lock 方法
-        let write_result = match self.write_que_d.clone() {
-            Some(write) => {
-                write
-            },
-            None => {
-                return Poll::Ready(Ok(buf.len()));
-            }
-        };
-        write_result.push(encrypted);
+        self.write_que_d.clone().and_then(|write| {
+            write.send(encrypted);
+            Some(())
+        });
 
         let tmp_buf = vec![1u8];
         match Pin::new(&mut self.inner).poll_write(cx, &tmp_buf) {
