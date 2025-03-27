@@ -15,12 +15,7 @@ use futures::lock::Mutex;
 
 use tokio::time::{Sleep};
 
-static ENC_TABLE: [u8; 256] = [34, 44, 94, 250, 111, 130, 151, 79, 193, 16, 210, 229, 133, 182, 78, 184, 103, 135, 32, 218, 93, 232, 126, 110, 113, 40, 185, 89, 14, 163, 132, 70, 197, 209, 245, 13, 224, 8, 69, 159, 12, 29, 53, 240, 173, 196, 39, 177, 35, 66, 72, 10, 15, 160, 169, 176, 236, 6, 200, 49, 99, 107, 48, 140, 125, 22, 36, 253, 80, 54, 31, 143, 115, 112, 187, 165, 226, 144, 45, 222, 51, 65, 74, 199, 24, 248, 228, 118, 181, 231, 131, 5, 2, 179, 213, 191, 114, 202, 47, 20, 243, 63, 25, 147, 223, 198, 17, 146, 84, 62, 71, 58, 238, 174, 241, 207, 145, 128, 67, 215, 109, 234, 129, 101, 212, 77, 239, 203, 95, 21, 59, 76, 136, 208, 178, 246, 189, 247, 26, 97, 88, 221, 38, 188, 230, 28, 167, 46, 86, 139, 108, 166, 251, 190, 104, 56, 211, 220, 123, 155, 81, 168, 148, 175, 117, 30, 124, 183, 201, 242, 192, 138, 11, 233, 235, 33, 162, 57, 161, 82, 142, 60, 37, 249, 255, 7, 73, 180, 83, 91, 90, 18, 106, 120, 171, 237, 96, 41, 252, 195, 64, 141, 244, 172, 186, 194, 23, 61, 52, 152, 55, 154, 27, 156, 134, 92, 219, 216, 204, 105, 102, 4, 9, 68, 119, 164, 217, 137, 158, 227, 254, 87, 100, 122, 205, 127, 121, 157, 42, 170, 214, 3, 206, 225, 149, 85, 0, 43, 1, 153, 116, 75, 50, 150, 98, 19];
-
-
-
-
-
+static ENC_TABLE: [u8; 256] = [189, 139, 239, 187, 245, 65, 220, 227, 223, 44, 129, 196, 134, 194, 120, 181, 157, 235, 8, 158, 144, 221, 18, 7, 173, 215, 54, 53, 4, 211, 5, 43, 20, 200, 63, 140, 162, 179, 88, 40, 135, 68, 174, 251, 121, 51, 72, 230, 229, 37, 74, 225, 242, 137, 237, 165, 49, 170, 56, 122, 50, 171, 123, 191, 28, 47, 205, 31, 34, 25, 206, 106, 177, 103, 95, 149, 80, 133, 233, 41, 57, 128, 90, 160, 232, 14, 202, 84, 98, 12, 182, 58, 114, 231, 91, 201, 166, 243, 132, 164, 208, 52, 210, 136, 3, 199, 175, 197, 92, 64, 107, 26, 48, 216, 30, 27, 79, 108, 124, 70, 204, 86, 148, 213, 59, 186, 151, 169, 131, 87, 75, 214, 252, 167, 77, 83, 178, 110, 207, 6, 188, 60, 17, 67, 73, 180, 101, 154, 66, 222, 29, 255, 100, 250, 119, 115, 13, 152, 9, 184, 240, 117, 150, 236, 155, 109, 62, 19, 10, 247, 156, 244, 209, 126, 111, 24, 190, 22, 217, 81, 228, 141, 55, 102, 42, 93, 78, 15, 146, 138, 153, 212, 11, 1, 112, 0, 185, 254, 32, 113, 176, 76, 168, 219, 130, 246, 45, 143, 161, 172, 71, 145, 104, 105, 46, 224, 21, 226, 99, 116, 193, 85, 23, 218, 249, 183, 61, 82, 238, 118, 234, 241, 96, 125, 89, 35, 69, 97, 16, 142, 253, 33, 39, 94, 248, 36, 38, 198, 127, 195, 203, 147, 163, 192, 159, 2];
 // 生成与 ENC_TABLE 对应的解密表
 fn build_dec_table() -> [u8; 256] {
     let mut dec_table = [0u8; 256];
@@ -55,38 +50,62 @@ pub struct AesCryptoStream<T> {
     read_buf: Vec<u8>,
     read_pos: usize,
     hash: String,
-    first:bool,
+    first: bool,
     partial_buf: Vec<u8>,        // 用来存储还没凑够的字节
     partial_needed: usize,       // 还差多少字节才能到 32
-
-
     wait_count: u32,
-    sleep_future: Option<Pin<Box<Sleep>>>,
     data_len: usize,
     read_que: Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,
-    write_que:Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,
+    write_que: Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,
     read_que_d: Option<Arc<Receiver<Vec<u8>>>>,
-    write_que_d:Option<Arc<Sender<Vec<u8>>>>,
+    write_que_d: Option<Arc<Sender<Vec<u8>>>>,
 }
 
 impl<T> AesCryptoStream<T> {
-    const MAX_RETRY: u8 = 10;
+    const MAX_RETRY: u32 = 25;
 
-    pub fn new(inner: T,s:String,read_que:Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>,write_que:Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>) -> Self {
-        Self { inner, read_buf: Vec::new(), read_pos: 0 ,hash:s,first:true, partial_buf: vec![], partial_needed: 32, wait_count: 0, sleep_future: None, data_len: 0, read_que, write_que, read_que_d: None, write_que_d: None }
+    pub fn new(inner: T, s: String, read_que: Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>, write_que: Arc<Cache<String, Arc<Receiver<Vec<u8>>>>>) -> Self {
+        Self {
+            inner,
+            read_buf: Vec::new(),
+            read_pos: 0,
+            hash: s,
+            first: true,
+            partial_buf: vec![],
+            partial_needed: 32,
+            wait_count: 0,
+            data_len: 0,
+            read_que,
+            write_que,
+            read_que_d: None,
+            write_que_d: None
+        }
     }
 }
 
 impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
-     fn poll_read(
+    fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         out_buf: &mut ReadBuf<'_>
     ) -> Poll<IoResult<()>> {
-         println!("poll_read start");
+        // 递增重试计数并检查
+        self.wait_count += 1;
+        if self.wait_count > Self::MAX_RETRY as u32 {
+
+            println!("Max retries reached ({}/{}), returning empty result",
+                     self.wait_count, Self::MAX_RETRY);
+            // self.write_que.remove(&self.hash);
+            self.wait_count = 0;  // 重置计数
+            return Poll::Ready(Ok(()));  // 返回空结果
+        }
+
         // 如果有已解密数据，则先返回缓冲区中的数据
         if self.read_pos < self.read_buf.len() {
-            println!("read_pos:{}",self.read_pos);
+            // 有数据时重置计数
+            self.wait_count = 0;
+
+            println!("read_pos:{}", self.read_pos);
             let remaining = &self.read_buf[self.read_pos..];
             let to_copy = std::cmp::min(remaining.len(), out_buf.remaining());
             out_buf.put_slice(&remaining[..to_copy]);
@@ -97,98 +116,162 @@ impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
             }
             return Poll::Ready(Ok(()));
         }
+
+        // 检查队列中是否有数据
+        let maybe_buf = self.read_que_d.as_ref().and_then(|read| {
+            match read.try_recv() {
+                Ok(buf) => Some(buf),
+                Err(_) => None,
+            }
+        });
+
+        if let Some(buf) = maybe_buf {
+            // 有数据，处理它
+            self.wait_count = 0;  // 重置计数
+            self.read_buf = decrypt(&buf);
+            self.read_pos = 0;
+            println!("Got data from queue, read_buf len:{}", self.read_buf.len());
+            let to_copy = std::cmp::min(self.read_buf.len(), out_buf.remaining());
+            out_buf.put_slice(&self.read_buf[..to_copy]);
+            self.read_pos = to_copy;
+            if self.read_pos == self.read_buf.len() {
+                self.read_buf.clear();
+                self.read_pos = 0;
+            }
+            return Poll::Ready(Ok(()));
+        }
+
         // 否则，从底层流中读取原始（加密）数据
         let mut tmp = [0u8; 4096];
         let mut tmp_buf = ReadBuf::new(&mut tmp);
-        println!("poll_read start 2");
+        // println!("poll_read start 2");
+        if self.read_que_d.is_none() || self.write_que_d.is_none() {
+            // 1) 检查缓存
+            let maybe_read = self.read_que.get(&self.hash);
+            match maybe_read {
+                Some(read) => {
+                    println!("Found socket in cache");
+                    self.read_que_d = Some(read);
+                },
+                None => {
+                    println!("Not found socket in cache");
+                }
+            }
+            let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
+            self.write_que_d = Some(Arc::new(tx));
+            self.write_que.insert(self.hash.clone(), Arc::new(rx));
+        }
         match Pin::new(&mut self.inner).poll_read(cx, &mut tmp_buf) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(())) => {
-                println!("poll_read start 3");
+            Poll::Pending => {
+                // println!("pending 2 - retry {}/{}", self.wait_count, Self::MAX_RETRY);
 
-                if self.first{
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
+            Poll::Ready(Ok(())) => {
+                // println!("poll_read start 3");
+
+                if self.first {
                     let n = tmp_buf.filled().len();
                     if n == 0 {
-                        return Poll::Ready(Ok(()));
+                        // 使用单独的任务来确保唤醒
+                        let waker = cx.waker().clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                            waker.wake();
+                        });
+                        return Poll::Pending;
                     }
-                    println!("n:{}",n);
-                    let mut encrypted_data = &tmp_buf.filled()[..n];
+                    println!("n:{}", n);
+                    let encrypted_data = &tmp_buf.filled()[..n];
 
                     // 解密获得明文数据
-                    let decrypted = decrypt(encrypted_data.clone());
+                    let decrypted = decrypt(encrypted_data);
                     self.partial_buf.extend_from_slice(&decrypted);
                     if self.partial_buf.len() < self.partial_needed {
+                        // 使用单独的任务来确保唤醒
+                        let waker = cx.waker().clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                            waker.wake();
+                        });
+
                         return Poll::Pending;
                     }
 
                     self.first = false;
-
+                    self.wait_count = 0; // 重置计数
 
                     let hash = String::from_utf8_lossy(&self.partial_buf[..32]).to_string();
                     self.hash = hash.to_string();
-                    println!("hash:{}",self.hash);
-                    let mut temp_p = self.partial_buf[32..].to_vec();
+                    println!("hash:{}", self.hash);
+                    let temp_p = self.partial_buf[32..].to_vec();
                     let to_copy = std::cmp::min(temp_p.len(), out_buf.remaining());
+                    if to_copy == 0 {
+                        // 使用单独的任务来确保唤醒
+                        let waker = cx.waker().clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                            waker.wake();
+                        });
 
-                    out_buf.put_slice(&temp_p[..to_copy]);
-                    if self.read_que_d.is_none() || self.write_que_d.is_none() {
-                        let mut max_try = 100000000;
-                        // 1) 检查缓存
-
-
-                        let maybe_read = self.read_que.get(&self.hash);
-                        match maybe_read {
-                            Some(mut read) => {
-                                println!("Found socket in cache");
-                                self.read_que_d = Some(read);
-                            },
-                            None => {
-                                println!("Not found socket in cache");
-                            }
-                        }
-                        let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
-                        self.write_que_d = Some(Arc::new(tx));
-                        self.write_que.insert(self.hash.clone(), Arc::new(rx));
+                        return Poll::Pending;
                     }
+                    // println!("to_copy:{}", to_copy);
+                    out_buf.put_slice(&temp_p[..to_copy]);
+
+
+                    return Poll::Ready(Ok(()));
                 }
-                // let mut this = self;
-                let mut this = self.as_mut();
-                loop {
-                    let maybe_buf = this.read_que_d.as_ref().and_then(|read| {
-                        match read.try_recv() {
-                            Ok(buf) => Some(buf),
-                            Err(_) => None,
-                        }
+
+                // 再次检查队列中是否有数据
+                let maybe_buf = self.read_que_d.as_ref().and_then(|read| {
+                    match read.try_recv() {
+                        Ok(buf) => Some(buf),
+                        Err(_) => None,
+                    }
+                });
+
+                if let Some(buf) = maybe_buf {
+                    // 有数据，处理它
+                    self.wait_count = 0; // 重置计数
+                    self.read_buf = decrypt(&buf);
+                    self.read_pos = 0;
+                    println!("read_buf len:{}", self.read_buf.len());
+                    let to_copy = std::cmp::min(self.read_buf.len(), out_buf.remaining());
+                    out_buf.put_slice(&self.read_buf[..to_copy]);
+                    self.read_pos = to_copy;
+                    println!("read_pos:{}", self.read_pos);
+                    println!("read_buf len:{}", self.read_buf.len());
+                    if self.read_pos == self.read_buf.len() {
+                        self.read_buf.clear();
+                        self.read_pos = 0;
+                        println!("read_buf clear");
+                    }
+                    return Poll::Ready(Ok(()));
+                } else {
+                    // 没有数据，使用单独的任务来确保唤醒
+                    // println!("No data available - retry {}/{}", self.wait_count, Self::MAX_RETRY);
+
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                        waker.wake();
                     });
 
-                    if let Some(buf) = maybe_buf {
-                        // 锁已在上面的作用域中释放，现在可以安全地修改 this 内部数据
-                        this.read_buf = decrypt(&buf);
-                        this.read_pos = 0;
-                        println!("read_buf len:{}", this.read_buf.len());
-                        let to_copy = std::cmp::min(this.read_buf.len(), out_buf.remaining());
-                        out_buf.put_slice(&this.read_buf[..to_copy]);
-                        this.read_pos = to_copy;
-                        println!("read_pos:{}", this.read_pos);
-                        println!("read_buf len:{}", this.read_buf.len());
-                        if this.read_pos == this.read_buf.len() {
-                            this.read_buf.clear();
-                            this.read_pos = 0;
-                            println!("read_buf clear");
-                        }
-                        break;
-                    }
+                    // println!("Pending");
+                    return Poll::Pending;
                 }
-
-
-
-
-
-
-
-                Poll::Ready(Ok(()))
             },
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Ready(Err(e)) => {
+                return Poll::Ready(Err(e));
+            },
         }
     }
 }
@@ -199,32 +282,102 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for AesCryptoStream<T> {
         cx: &mut Context<'_>,
         buf: &[u8]
     ) -> Poll<IoResult<usize>> {
+        println!("send 111");
+
         // 对传入数据整体加密
         let encrypted = encrypt(buf);
 
+        // 尝试发送到write队列
+        let send_success = self.write_que_d.clone().and_then(|write| {
+            let send_result = write.send(encrypted.clone());
+            match send_result {
+                Ok(_) => {
+                    println!("Send data to write queue success len {}", encrypted.len());
+                    Some(true)
+                },
+                Err(e) => {
+                    println!("Error sending data to write queue: {}", e);
+                    Some(false)
+                },
+            }
+        }).unwrap_or(false);
 
-        self.write_que_d.clone().and_then(|write| {
-            write.send(encrypted);
-            Some(())
-        });
+        if !send_success {
+            // 发送失败，使用单独的任务来确保唤醒
+            println!("Send failed, will retry");
 
+            let waker = cx.waker().clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                waker.wake();
+            });
+
+            return Poll::Pending;
+        }
+
+        // 发送成功，继续调用内部流的poll_write
         let tmp_buf = vec![1u8];
         match Pin::new(&mut self.inner).poll_write(cx, &tmp_buf) {
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(buf.len())), // 返回写入原始数据的长度
-            other => other,
+            Poll::Pending => {
+                // 内部流挂起，使用单独的任务来确保唤醒
+                println!("Inner write pending, will retry");
+
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                Poll::Pending
+            },
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
         }
     }
+
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>
     ) -> Poll<IoResult<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        // 调用内部流的poll_flush
+        match Pin::new(&mut self.inner).poll_flush(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Pending => {
+                // 内部流挂起，使用单独的任务来确保唤醒
+                println!("Inner flush pending, will retry");
+
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                Poll::Pending
+            },
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
+
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>
     ) -> Poll<IoResult<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+        // 调用内部流的poll_shutdown
+        match Pin::new(&mut self.inner).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Pending => {
+                // 内部流挂起，使用单独的任务来确保唤醒
+                println!("Inner shutdown pending, will retry");
+
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                Poll::Pending
+            },
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
 }
-

@@ -57,7 +57,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
 
         tokio::spawn(async move {
             if let Err(e) = handle_socks5_connection(&mut crypto_stream).await {
-                eprintln!("Error handling connection from {}: {}", addr, e);
+                eprintln!("Error handling connection from2 {}: {}", addr, e);
             }
         });
     }
@@ -71,7 +71,7 @@ where
 
 
     // 1. 读取 SOCKS5 握手：版本号和支持的认证方法数量
-    let mut testbuf = [0u8; 33];
+    let mut testbuf = [0u8; 32];
     stream.read_exact(&mut testbuf).await?;
     let mut buf = [0u8; 2];
     println!("start read 1");

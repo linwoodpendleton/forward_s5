@@ -1,3 +1,4 @@
+use std::future::Future;
 //aes_crypto.rs
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use std::pin::Pin;
@@ -5,12 +6,7 @@ use std::task::{Context, Poll};
 use std::io::Result as IoResult;
 use tokio::net::TcpStream;
 
-static ENC_TABLE: [u8; 256] = [34, 44, 94, 250, 111, 130, 151, 79, 193, 16, 210, 229, 133, 182, 78, 184, 103, 135, 32, 218, 93, 232, 126, 110, 113, 40, 185, 89, 14, 163, 132, 70, 197, 209, 245, 13, 224, 8, 69, 159, 12, 29, 53, 240, 173, 196, 39, 177, 35, 66, 72, 10, 15, 160, 169, 176, 236, 6, 200, 49, 99, 107, 48, 140, 125, 22, 36, 253, 80, 54, 31, 143, 115, 112, 187, 165, 226, 144, 45, 222, 51, 65, 74, 199, 24, 248, 228, 118, 181, 231, 131, 5, 2, 179, 213, 191, 114, 202, 47, 20, 243, 63, 25, 147, 223, 198, 17, 146, 84, 62, 71, 58, 238, 174, 241, 207, 145, 128, 67, 215, 109, 234, 129, 101, 212, 77, 239, 203, 95, 21, 59, 76, 136, 208, 178, 246, 189, 247, 26, 97, 88, 221, 38, 188, 230, 28, 167, 46, 86, 139, 108, 166, 251, 190, 104, 56, 211, 220, 123, 155, 81, 168, 148, 175, 117, 30, 124, 183, 201, 242, 192, 138, 11, 233, 235, 33, 162, 57, 161, 82, 142, 60, 37, 249, 255, 7, 73, 180, 83, 91, 90, 18, 106, 120, 171, 237, 96, 41, 252, 195, 64, 141, 244, 172, 186, 194, 23, 61, 52, 152, 55, 154, 27, 156, 134, 92, 219, 216, 204, 105, 102, 4, 9, 68, 119, 164, 217, 137, 158, 227, 254, 87, 100, 122, 205, 127, 121, 157, 42, 170, 214, 3, 206, 225, 149, 85, 0, 43, 1, 153, 116, 75, 50, 150, 98, 19];
-
-
-
-
-
+static ENC_TABLE: [u8; 256] = [189, 139, 239, 187, 245, 65, 220, 227, 223, 44, 129, 196, 134, 194, 120, 181, 157, 235, 8, 158, 144, 221, 18, 7, 173, 215, 54, 53, 4, 211, 5, 43, 20, 200, 63, 140, 162, 179, 88, 40, 135, 68, 174, 251, 121, 51, 72, 230, 229, 37, 74, 225, 242, 137, 237, 165, 49, 170, 56, 122, 50, 171, 123, 191, 28, 47, 205, 31, 34, 25, 206, 106, 177, 103, 95, 149, 80, 133, 233, 41, 57, 128, 90, 160, 232, 14, 202, 84, 98, 12, 182, 58, 114, 231, 91, 201, 166, 243, 132, 164, 208, 52, 210, 136, 3, 199, 175, 197, 92, 64, 107, 26, 48, 216, 30, 27, 79, 108, 124, 70, 204, 86, 148, 213, 59, 186, 151, 169, 131, 87, 75, 214, 252, 167, 77, 83, 178, 110, 207, 6, 188, 60, 17, 67, 73, 180, 101, 154, 66, 222, 29, 255, 100, 250, 119, 115, 13, 152, 9, 184, 240, 117, 150, 236, 155, 109, 62, 19, 10, 247, 156, 244, 209, 126, 111, 24, 190, 22, 217, 81, 228, 141, 55, 102, 42, 93, 78, 15, 146, 138, 153, 212, 11, 1, 112, 0, 185, 254, 32, 113, 176, 76, 168, 219, 130, 246, 45, 143, 161, 172, 71, 145, 104, 105, 46, 224, 21, 226, 99, 116, 193, 85, 23, 218, 249, 183, 61, 82, 238, 118, 234, 241, 96, 125, 89, 35, 69, 97, 16, 142, 253, 33, 39, 94, 248, 36, 38, 198, 127, 195, 203, 147, 163, 192, 159, 2];
 // 生成与 ENC_TABLE 对应的解密表
 fn build_dec_table() -> [u8; 256] {
     let mut dec_table = [0u8; 256];
@@ -45,25 +41,38 @@ pub struct AesCryptoStream<T> {
     read_buf: Vec<u8>,
     read_pos: usize,
     socket_b: TcpStream,
-    first:bool,
+    first: bool,
+    wait_count: u32,
 }
 
 impl<T> AesCryptoStream<T> {
-    pub async fn new_async(inner: T, s: TcpStream) -> IoResult<Self> {
+    const MAX_RETRY: u32 = 25;
+
+    pub async fn new_async(inner: T, client_hash: String) -> IoResult<Self> {
         // 在同一个 Runtime 里异步地去连接 8080
+        let mut socket_b = match TcpStream::connect("127.0.0.1:58080").await {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("Failed to connect to 127.0.0.1:58080: {}", e);
+                return Err(e);
+            }
+        };
 
-
+        if let Err(e) = socket_b.write_all(client_hash.as_bytes()).await {
+            eprintln!("Failed to send hash: {}", e);
+            return Err(e);
+        }
+        println!("Connected to server and sent hash");
 
         Ok(Self {
             inner,
             read_buf: Vec::new(),
             read_pos: 0,
-
-            socket_b:s,
-            first:true,
+            socket_b: socket_b,
+            first: true,
+            wait_count: 0,
         })
     }
-
 }
 
 impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
@@ -72,9 +81,20 @@ impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
         cx: &mut Context<'_>,
         out_buf: &mut ReadBuf<'_>
     ) -> Poll<IoResult<()>> {
-        println!("poll_read");
+        // 递增重试计数并检查
+        self.wait_count += 1;
+        if self.wait_count > Self::MAX_RETRY as u32 {
+            println!("Max retries reached ({}/{}), returning empty result",
+                     self.wait_count, Self::MAX_RETRY);
+            self.wait_count = 0;  // 重置计数
+            return Poll::Ready(Ok(()));  // 返回空结果
+        }
+
         // 如果有已解密数据，则先返回缓冲区中的数据
         if self.read_pos < self.read_buf.len() {
+            // 有数据时重置计数
+            self.wait_count = 0;
+
             let remaining = &self.read_buf[self.read_pos..];
             let to_copy = std::cmp::min(remaining.len(), out_buf.remaining());
             out_buf.put_slice(&remaining[..to_copy]);
@@ -85,32 +105,35 @@ impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
             }
             return Poll::Ready(Ok(()));
         }
-        // 否则，从底层流中读取原始（加密）数据
-        let mut tmp = [0u8; 4096];
-        let mut tmp_buf = ReadBuf::new(&mut tmp);
-        match Pin::new(&mut self.inner).poll_read(cx, &mut tmp_buf) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(())) => {
 
-                // 解密获得明文数据
+        let mut pinned_socket = Pin::new(&mut self.socket_b);
+        let mut temp = [0u8; 4096];
+        let mut temp_read_buf = ReadBuf::new(&mut temp);
 
-
-                let mut pinned_socket = Pin::new(&mut self.socket_b);
-                let mut temp = [0u8; 4096];
-                let mut temp_read_buf = ReadBuf::new(&mut temp);
-                // 调用 poll_write 写入解密数据
-                let _ = match pinned_socket.as_mut().poll_read(cx, &mut temp_read_buf) {
-                    Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                };
+        // 调用 poll_read 读取数据
+        match pinned_socket.as_mut().poll_read(cx, &mut temp_read_buf) {
+            Poll::Ready(Ok(_)) => {
                 let n = temp_read_buf.filled().len();
                 if n == 0 {
-                    return Poll::Ready(Ok(()));
+                    // println!("Empty read ({}), will retry", self.wait_count);
+
+                    // 使用单独的任务来确保唤醒
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                        waker.wake();
+                    });
+
+                    return Poll::Pending;
                 }
+
+                // 重置计数
+                self.wait_count = 0;
+                println!("Received {} bytes", n);
+
                 let encrypted_data = &temp_read_buf.filled()[..n];
                 let decrypted = decrypt(encrypted_data);
-                
+
                 self.read_buf = decrypted;
                 self.read_pos = 0;
                 let to_copy = std::cmp::min(self.read_buf.len(), out_buf.remaining());
@@ -120,7 +143,20 @@ impl<T: AsyncRead + Unpin> AsyncRead for AesCryptoStream<T> {
                     self.read_buf.clear();
                     self.read_pos = 0;
                 }
-                Poll::Ready(Ok(()))
+
+                return Poll::Ready(Ok(()));
+            },
+            Poll::Pending => {
+                // println!("Read pending (retry {}/{})", self.wait_count, Self::MAX_RETRY);
+
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
             },
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
         }
@@ -141,9 +177,20 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for AesCryptoStream<T> {
         match pinned_socket.as_mut().poll_write(cx, &encrypted) {
             Poll::Ready(Ok(n)) => {
                 // 写入成功，返回写入字节数
-                    println!("Wrote {} bytes to server b", n);
+                println!("Wrote {} bytes to server b", n);
             },
-            Poll::Pending => return Poll::Pending,
+            Poll::Pending => {
+                println!("Write pending to server b");
+
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
         }
 
@@ -152,22 +199,97 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for AesCryptoStream<T> {
             self.first = false;
             tmp_buf = encrypted;
         }
+
+        // 写入内部流
         match Pin::new(&mut self.inner).poll_write(cx, &tmp_buf) {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(buf.len())), // 这里假设写入成功后返回原始数据长度
-            other => other,
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(buf.len())), // 返回写入原始数据的长度
+            Poll::Pending => {
+                println!("Write pending to inner stream");
+
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
         }
-        
     }
+
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>
     ) -> Poll<IoResult<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        // 先尝试刷新socket_b
+        match Pin::new(&mut self.socket_b).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {},
+            Poll::Pending => {
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+        }
+
+        // 然后刷新内部流
+        match Pin::new(&mut self.inner).poll_flush(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Pending => {
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
+
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>
     ) -> Poll<IoResult<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+        // 先尝试关闭socket_b
+        match Pin::new(&mut self.socket_b).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => {},
+            Poll::Pending => {
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+        }
+
+        // 然后关闭内部流
+        match Pin::new(&mut self.inner).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Pending => {
+                // 使用单独的任务来确保唤醒
+                let waker = cx.waker().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    waker.wake();
+                });
+
+                return Poll::Pending;
+            },
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
 }
